@@ -1,0 +1,287 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     Jan 07, 2019
+               Add latent auction prices to Model 4
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+// I think the combination of similarly valued parameters can be accomplished by switching to a manual definition and shifting the 1 for a 
+// NAICS alternative, or similar, to the corresponding column/row.
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5432);
+dbSetDatabaseName(id, "ggha_commercial");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, naics_cnl_ct_1km, naics_3d_ct_1km, naics_cnl, alt_id, tot_sales_emp,
+                bld_area, taz_pop, credit_id, gross_rent FROM public.working_data_1_per ORDER BY sid, alt_id");
+@---Array columns: 1: sid, 2: chosen, 3: naics_cnl_ct_1km, 4: naics_3d_ct_1km, 5: naics_cnl, 6: alt_id,
+               7: tot_sales_emp, 8: build_area, 9: taz_pop, 10: credit_id, 11: gross_rent ---@
+INPUT =  dbQueryFetchAllM(qid);
+save INPUT;
+dbClose(id);
+
+load INPUT;
+
+NOBS =rows(INPUT);
+NHEAD = 2;
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 30;
+NSITS = NOBS / NALTS;
+NNESTS = 5;
+NALLOCATE = 30;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = NNAICS+4;
+
+// Indicates whether to include latent auction component (normal dist)
+INC_RENTS = 1;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS+1);
+
+naics = zeros(NOBS, NNAICS);
+naicsCodes = {2,3,42,44,5,6,7,8,9};
+threadfor i(1, rows(naicsCodes), 1);
+    naics[., i] = (INPUT[., 5].==naicsCodes[i]);
+threadendfor;
+
+// Population of area (logged)
+DATA[., 1:NNAICS] = naics .* ln(INPUT[., 9]);
+
+// Count the number of similar firms (by naics_cnl) as 100s within 500m. Different industries different distances?
+DATA[., NNAICS+1] = INPUT[., 3] ./ 10^2;
+// Total sales per employee
+DATA[., NNAICS+2] = ln(INPUT[., 7]);
+// Assuming that 'x' is the output of the 'ln' call
+x = DATA[., NNAICS+2];
+if iscplx(x);
+    print "complex matrix sent to 'ln' 1";
+    end;
+endif;
+// Credit rating id of firm (very good or excellent wrt good)
+threadfor i(1, 2, 1);
+    DATA[., NNAICS+2+i] = (INPUT[., 10].==i+1);
+threadendfor;
+
+if INC_RENTS==1;
+    DATA[., NVARS+1] = INPUT[.,11];
+endif;
+
+arrNest = zeros(NALTS, NNESTS);
+//for i(1, NOBS, 1);
+//        if INPUT[i, 6] <= 7;
+//            arrNest[i, 1] = 1;
+//        else;
+//            arrNest[i, 2] = 1;
+//        endif;
+//        if INPUT[i, 6] == 3 or INPUT[i, 6] == 4 or INPUT[i, 6] == 5 or INPUT[i, 6] == 6 or INPUT[i, 6] == 11 or INPUT[i, 6] == 15 or INPUT[i, 6] == 16 or INPUT[i, 6] == 17 or INPUT[i, 6] == 24 or INPUT[i, 6] == 25 or INPUT[i, 6] == 26 or INPUT[i, 6] == 27 or INPUT[i, 6] == 28;
+//            arrNest[i, 3] = 1;
+//        elseif INPUT[i, 6] == 1 or INPUT[i, 6] == 9 or INPUT[i, 6] == 13 or INPUT[i, 6] == 22 or INPUT[i, 6] == 2 or INPUT[i, 6] == 10 or INPUT[i, 6] == 14 or INPUT[i, 6] == 23;
+//            arrNest[i, 4] = 1;
+//        else;
+//            arrNest[i, 5] = 1;
+//        endif;
+//endfor;
+
+/* Head nest */
+arrNest[1,1] = 1;
+arrNest[2,1] = 1;
+arrNest[3,1] = 1;
+arrNest[4,1] = 1;
+arrNest[5,1] = 1;
+arrNest[6,1] = 1;
+arrNest[7,1] = 1;
+arrNest[8,1] = 1;
+/* Subsid nest */
+arrNest[9,2] = 1;
+arrNest[10,2] = 1;
+arrNest[11,2] = 1;
+arrNest[12,2] = 1;
+/* Branch nest */
+arrNest[13,2] = 1;
+arrNest[14,2] = 1;
+arrNest[15,2] = 1;
+arrNest[16,2] = 1;
+arrNest[17,2] = 1;
+arrNest[18,2] = 1;
+arrNest[19,2] = 1;
+arrNest[20,2] = 1;
+/* Single loc nest */
+arrNest[21,2] = 1;
+arrNest[22,2] = 1;
+arrNest[23,2] = 1;
+arrNest[24,2] = 1;
+arrNest[25,2] = 1;
+arrNest[26,2] = 1;
+arrNest[27,2] = 1;
+arrNest[28,2] = 1;
+arrNest[29,2] = 1;
+arrNest[30,2] = 1;
+/* Agriculture nest */
+arrNest[21,4] = 1;
+/* Heavy industry nest */
+arrNest[1,4] = 1;
+arrNest[9,4] = 1;
+arrNest[13,4] = 1;
+arrNest[22,4] = 1;
+/* Manufacturing nest */
+arrNest[2,4] = 1;
+arrNest[10,4] = 1;
+arrNest[14,4] = 1;
+arrNest[23,4] = 1;
+/* Wholesale nest */
+arrNest[7,5] = 1;
+arrNest[12,5] = 1;
+arrNest[19,5] = 1;
+arrNest[29,5] = 1;
+/* Retail nest */
+arrNest[8,5] = 1;
+arrNest[20,5] = 1;
+arrNest[30,5] = 1;
+/* Professional services nest */
+arrNest[3,3] = 1;
+arrNest[11,3] = 1;
+arrNest[15,3] = 1;
+arrNest[24,3] = 1;
+/* Institutional nest */
+arrNest[4,3] = 1;
+arrNest[16,3] = 1;
+arrNest[25,3] = 1;
+/* Arts nest */
+arrNest[5,3] = 1;
+arrNest[17,3] = 1;
+arrNest[26,3] = 1;
+/* Other service nest */
+arrNest[6,3] = 1;
+arrNest[18,3] = 1;
+arrNest[27,3] = 1;
+/* Government nest */
+arrNest[28,3] = 1;
+
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local Mu, MuMat, v, vmu3D, p13D, p23D, num, denom, denomMat, denom2, IV, p, LLR, cLLR, asc, v3D, baseAllocate, allocateTypes, allocateNAICS, allocate;
+    local alpha, gam, sig, Ri, xi, r, fin;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    Mu = 1+exp(bn[NVARS+1:NVARS+NNESTS,1]);
+    Mu = arrNest .* areshape(Mu, 1|NNESTS);
+    Mu = areshape(Mu, NSITS|NALTS|NNESTS);
+    
+    alpha = bn[rows(bn)-2];
+    gam = bn[rows(bn)-1];
+    sig = bn[rows(bn)];
+    
+    //Create a similar matrix for allocations
+    baseAllocate = exp(bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1]) ./ (1 + exp(bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1]));
+    allocateTypes = atranspose(areshape(baseAllocate, NHEAD|NALLOCATE),2|1).* arrNest[.,1:NHEAD];
+    allocateNAICS = atranspose(areshape(1-baseAllocate, (NNESTS-NHEAD)|NALLOCATE),2|1) .* arrNest[.,NHEAD:NNESTS];
+    allocate = aconcat(allocateTypes,allocateNAICS,1);
+    
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v .* Mu).*areshape(allocate, NSITS|NALTS|NNESTS);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+
+    /* Component 2 */
+    p23D = zeros(NSITS, NNESTS);
+    denomMat = arraytomat(atranspose(denom[.,1,.], 2|1|3));
+    
+    MuMat = arraytomat(atranspose(amax(Mu, 2), 2|1|3));
+    num = denomMat ./ MuMat;
+    denom2 = sumr(num);
+    p23D = num ./ denom2;
+    // Dimension to repeat along should be given first, then columns, then rows
+    p23D = atranspose(areshape(p23D, NALTS|NSITS|NNESTS), 2|1|3);
+    
+    p = p13D .* p23D;
+    
+    if INC_RENTS==1;
+        Ri = x[.,cols(x)];
+        Ri = arraytomat(areshape(Ri, NSITS|NALTS));
+        Ri = Ri[.,1];
+        xi = Ri - alpha - gam * ln(denom2);
+        r = pdfn(xi./sig);
+    endif;
+    
+    p = asum(p, 1);
+    p = arraytomat(atranspose(p,3|1|2));
+    if INC_RENTS==1;
+        LLR = p.*r;
+    else;
+        LLR = p;
+    endif;
+    
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    // Assuming that 'cLLR' is the output of the 'ln' call
+    if iscplx(cLLR);
+        print "complex matrix sent to 'ln' 3";
+        end;
+    endif;
+    retp(cLLR[.,1]);
+    
+endp;
+
+/*------Starting Values of the Parameters-*/
+B = 0.1*ones(NVARS+NNESTS,1)|0.5*ones(NALLOCATE,1);
+
+if INC_RENTS==1;
+     // Latent auction parameters
+    B = B|ones(3,1);
+endif;
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library maxlik,pgraph ;
+#include maxlik.ext ;
+maxset ;
+  if INC_RENTS==1;
+      _max_Active = ones(NVARS+NNESTS-1,1)|0|ones(NALLOCATE,1)|ones(3,1);
+  else;
+      _max_Active = ones(NVARS+NNESTS-1,1)|0|ones(NALLOCATE,1);
+  endif;
+  _max_Algorithm=2;  /* 1=STEEP, 2=BFGS, 3=DFP, 4=NEWTON, 5=BHHH, 6=PRCG */
+  _max_LineSearch=2;
+  _max_GradTol=5e-4;
+  _max_MaxIters=1500;
+  _max_CovPar=2;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+//  _max_Switch = {2,
+//                0.00001,
+//                1500,
+//                0.0001};
+__title = "GTA Firms Nested Location Choice";
+
+{ coeff,f,g,cov,ret } = maxprt(maxlik(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_max_FinalHess);
+print cov;

@@ -1,0 +1,263 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     July 21, 2018
+               Cross nested model with variables and allocation terms
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+// I think the combination of similarly valued parameters can be accomplished by switching to a manual definition and shifting the 1 for a 
+// NAICS alternative, or similar, to the corresponding column/row.
+
+@ Setting the output file @
+output file = "/home/jason/Documents/Conference Submissions/TRB2019/outputs/output2.out";
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5433);
+dbSetDatabaseName(id, "ggha_business_2017");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, parcel_id, naics_cnl_ct, naics_3d_ct, naics_8d_ct, naics_cnl, alt_id, tot_sales_emp,
+                build_area, height, shop_trips, pop, credit_id FROM public.working_data_cnl_10_per ORDER BY sid");
+@---Array columns: 1: sid, 2: chosen, 3: parcel_id, 4: naics_cnl_ct, 5: naics_3d_ct, 6: naics_8d_Ct, 7: naics_cnl, 8: alt_id,
+               9: tot_sales_emp, 10: build_area, 11: height, 12: shop_trips, 13: pop, 14: credit_id ---@
+INPUT =  dbQueryFetchAllM(qid);
+//INPUT = csvReadM("data.csv", 2);
+save INPUT;
+dbClose(id);
+
+NOBS =rows(INPUT);
+NHEAD = 2;
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 31;
+NASC = NALTS - 1;
+NSITS = NOBS / NALTS;
+NNESTS = 1;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = NASC+NNAICS+4;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS);
+threadfor i(1, NASC, 1);
+    DATA[., i] = (INPUT[., 8].==i+1);
+threadendfor;
+
+naics = zeros(NOBS, NNAICS);
+naicsCodes = {2,3,42,44,5,6,7,8,9};
+threadfor i(1, rows(naicsCodes), 1);
+    naics[., i] = (INPUT[., 7].==naicsCodes[i]);
+threadendfor;
+
+// Area of building and industry code (by naics_cnl). Can also use height and volume.
+//datArea = INPUT[., 10] ./ 10^3;
+//datHeight = INPUT[., 11];
+//datVol = datArea .* datHeight;
+//DATA[., NASC+1:NASC+NNAICS] = naics .* datArea;
+//// Number of shopping trips (logged)
+//DATA[., NASC+1:NASC+NNAICS] = naics .* ln(INPUT[., 12]);
+// Population of area (logged)
+DATA[., NASC+1:NASC+NNAICS] = naics .* ln(INPUT[., 13]);
+
+// Count the number of similar firms (by naics_cnl) as 100s within 500m. Different industries different distances?
+DATA[., NASC+NNAICS+1] = INPUT[., 4] ./ 10^2;
+// Total sales per employee
+DATA[., NASC+NNAICS+2] = ln(INPUT[., 9]);
+// Assuming that 'x' is the output of the 'ln' call
+x = DATA[., NASC+NNAICS+2];
+if iscplx(x);
+    print "complex matrix sent to 'ln' 1";
+    end;
+endif;
+// Credit rating id of firm (very good or excellent wrt good)
+threadfor i(1, 2, 1);
+    DATA[., NASC+NNAICS+2+i] = (INPUT[., 14].==i+1);
+threadendfor;
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local v, vmu3D, p13D, p23D, num, denom, p, LLR, cLLR, asc, v3D;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+    
+    p = p13D;
+    LLR = asum(p, 1);
+    LLR = arraytomat(atranspose(LLR,3|1|2));
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    // Assuming that 'cLLR' is the output of the 'ln' call
+    if iscplx(cLLR);
+        print "complex matrix sent to 'ln' 3";
+        end;
+    endif;
+    retp(cLLR[.,1]);
+    
+endp;
+
+/*------Starting Values of the Parameters-*/
+
+B={   -1.0982491 
+       2.7658430 
+      -1.3655330 
+       1.5219153 
+       2.4970559 
+       1.3486578 
+      -1.2602328 
+      0.64702150 
+       2.1260249 
+      -2.0932357 
+      -1.8412603 
+      -1.0272712 
+     -0.86378427 
+     -0.95139895 
+       2.2899221 
+      -1.4920313 
+       1.1944083 
+      -1.4230287 
+       2.8167490 
+     -0.93286472 
+      -1.5915302 
+     -0.98288023 
+       2.7713781 
+      -1.3641760 
+      -1.0943033 
+       2.6059883 
+      -1.0864934 
+      -1.5217201 
+     -0.93674632 
+       2.1707558
+      0.15941717 
+     0.056142190 
+     0.088145300 
+      0.17679586 
+      0.20684420 
+      0.24910740 
+      0.19922434 
+      0.18432910 
+      0.27670639 
+      0.30307755 
+     0.023090745 
+    -0.042509806 
+    -0.069360946
+   };
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library maxlik,pgraph ;
+#include maxlik.ext ;
+maxset ;
+  _max_Active = ones(NVARS,1);
+  _max_Algorithm=2;  /* 1=STEEP, 2=BFGS, 3=DFP, 4=NEWTON, 5=BHHH, 6=PRCG */
+  _max_LineSearch=2;
+  _max_GradTol=5e-4;
+  _max_MaxIters=1500;
+  _max_CovPar=2;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+//  _max_Switch = {2,
+//                0.00001,
+//                1500,
+//                0.0001};
+__title = "GTA Firms Nested Location Choice";
+
+{ coeff,f,g,cov,ret } = maxprt(maxlik(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_max_FinalHess);
+print cov;
+
+//===============================================================================
+//                       GTA Firms Nested Location Choice                        
+//===============================================================================
+// MAXLIK Version 5.0.9                                      8/03/2018   6:02 pm
+//===============================================================================
+
+//return code =    0
+//normal convergence
+
+//Mean log-likelihood      -0.0778655
+//Number of cases     642878
+
+//Covariance matrix of the parameters computed by the following method:
+//Cross-product of first derivatives
+
+//Parameters    Estimates     Std. err.  Est./s.e.  Prob.    Gradient
+//------------------------------------------------------------------
+//P01             -1.1249        0.6095   -1.845   0.0650     -0.0001
+//P02              2.7172        0.6042    4.497   0.0000     -0.0002
+//P03             -1.3524        0.6799   -1.989   0.0467      0.0000
+//P04              1.5371        0.6072    2.531   0.0114      0.0001
+//P05              2.4988        0.6066    4.120   0.0000      0.0000
+//P06              1.3726        0.6130    2.239   0.0251      0.0000
+//P07             -1.2422        0.8114   -1.531   0.1258      0.0001
+//P08              0.6168        0.6079    1.015   0.3103     -0.0001
+//P09              2.1606        0.6074    3.557   0.0004      0.0001
+//P10             -2.0937        0.9562   -2.190   0.0286      0.0000
+//P11             -1.8528        0.6495   -2.853   0.0043      0.0000
+//P12             -1.0192        0.6502   -1.568   0.1170      0.0000
+//P13             -0.9033        0.6110   -1.479   0.1393     -0.0002
+//P14             -0.9386        0.6934   -1.354   0.1758      0.0000
+//P15              2.3158        0.6085    3.806   0.0001     -0.0001
+//P16             -1.4930        0.6253   -2.388   0.0170      0.0000
+//P17              1.2161        0.6082    1.999   0.0456      0.0002
+//P18             -1.4126        0.6526   -2.165   0.0304      0.0000
+//P19              2.7497        0.6070    4.530   0.0000     -0.0001
+//P20             -0.9336        0.6383   -1.463   0.1436      0.0000
+//P21             -1.6127        0.6172   -2.613   0.0090     -0.0001
+//P22             -0.9743        0.8057   -1.209   0.2266      0.0000
+//P23              2.6688        0.6081    4.389   0.0000      0.0000
+//P24             -1.3483        0.8114   -1.662   0.0966      0.0001
+//P25             -1.1100        0.6146   -1.806   0.0709     -0.0001
+//P26              2.6751        0.6084    4.397   0.0000      0.0001
+//P27             -1.0776        0.6517   -1.653   0.0982      0.0000
+//P28             -1.5411        0.6178   -2.495   0.0126     -0.0001
+//P29             -0.9225        0.6808   -1.355   0.1754      0.0000
+//P30              2.2087        0.6102    3.620   0.0003     -0.0001
+//P31             -0.1839        0.9027   -0.204   0.8385      0.0000
+//P32              0.7475        0.9042    0.827   0.4084     -0.0001
+//P33              0.5920        0.9031    0.655   0.5122     -0.0001
+//P34              0.1575        0.9017    0.175   0.8613      0.0001
+//P35              0.3666        0.9009    0.407   0.6840      0.0000
+//P36             -0.6172        0.9036   -0.683   0.4946      0.0000
+//P37             -0.2156        0.9042   -0.238   0.8115      0.0000
+//P38             -0.1573        0.9025   -0.174   0.8617      0.0000
+//P39              0.1512        0.9172    0.165   0.8691      0.0000
+//P40             -0.5620        0.6627   -0.848   0.3964     -0.0001
+//P41             -1.1776        0.6673   -1.765   0.0776     -0.0001
+//P42             -0.8882        0.6646   -1.336   0.1814     -0.0001
+//P43              0.7661        0.6604    1.160   0.2461      0.0002
+//P44              0.7264        0.6600    1.101   0.2711      0.0001
+//P45              0.9569        0.6617    1.446   0.1482      0.0000
+//P46              0.8686        0.6623    1.311   0.1897      0.0001
+//P47              0.3905        0.6617    0.590   0.5551     -0.0001
+//P48              0.5901        0.6749    0.874   0.3819      0.0000
+//P49              0.2815        0.0041   68.861   0.0000      0.0000
+//P50              0.0208        0.0022    9.247   0.0000     -0.0001

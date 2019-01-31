@@ -1,0 +1,548 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     July 21, 2018
+               Cross nested model with variables and allocation terms
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+// I think the combination of similarly valued parameters can be accomplished by switching to a manual definition and shifting the 1 for a 
+// NAICS alternative, or similar, to the corresponding column/row.
+
+@ Setting the output file @
+output file = "/home/jason/Documents/Conference Submissions/TRB2019/outputs/output2.out";
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5433);
+dbSetDatabaseName(id, "ggha_business_2017");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, parcel_id, naics_cnl_ct, naics_3d_ct, naics_8d_ct, naics_cnl, alt_id, tot_sales_emp,
+                build_area, height, area_com, pop FROM public.working_data_cnl_10_per ORDER BY sid");
+@---Array columns: 1: sid, 2: chosen, 3: parcel_id, 4: naics_cnl_ct, 5: naics_3d_ct, 6: naics_8d_Ct, 7: naics_cnl, 8: alt_id,
+               9: tot_sales_emp, 10: build_area, 11: height, 12: area_ind, 13: area_res ---@
+INPUT =  dbQueryFetchAllM(qid);
+//INPUT = csvReadM("data.csv", 2);
+save INPUT;
+dbClose(id);
+
+NOBS =rows(INPUT);
+NHEAD = 2;
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 31;
+NASC = NALTS - 1;
+NSITS = NOBS / NALTS;
+NNESTS = 6;
+NALLOCATE = 31;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = NASC+3*NNAICS+2;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS);
+threadfor i(1, NASC, 1);
+    DATA[., i] = (INPUT[., 8].==i+1);
+threadendfor;
+
+naics = zeros(NOBS, NNAICS);
+naicsCodes = {2,3,42,44,5,6,7,8,9};
+threadfor i(1, rows(naicsCodes), 1);
+    // Needs to be offset by 1 to account for skipping first NAICS code.
+    naics[., i] = (INPUT[., 7].==naicsCodes[i]);
+threadendfor;
+
+// Area of building and industry code (by naics_cnl). Can also use height and volume.
+datArea = INPUT[., 10] ./ 10^3;
+datHeight = INPUT[., 11];
+datVol = datArea .* datHeight;
+DATA[., NASC+1:NASC+NNAICS] = naics .* datArea;
+// Area devoted to commercial
+DATA[., NASC+1*NNAICS+1:NASC+2*NNAICS] = naics .* INPUT[., 12];
+// Population of area (logged)
+DATA[., NASC+2*NNAICS+1:NASC+3*NNAICS] = naics .* ln(INPUT[., 13]);
+
+// Count the number of similar firms (by naics_cnl) as 100s within 500m. Different industries different distances?
+DATA[., NASC+3*NNAICS+1] = INPUT[., 4] ./ 10^2;
+// Total sales per employee
+DATA[., NASC+3*NNAICS+2] = ln(INPUT[., 9]);
+// Assuming that 'x' is the output of the 'ln' call
+x = DATA[., NASC+3*NNAICS+2];
+if iscplx(x);
+    print "complex matrix sent to 'ln' 1";
+    end;
+endif;
+
+arrNest = zeros(NALTS, NNESTS);
+/* Head nest */
+arrNest[1,1] = 1;
+arrNest[4,1] = 1;
+arrNest[8,1] = 1;
+arrNest[13,1] = 1;
+arrNest[17,1] = 1;
+arrNest[21,1] = 1;
+arrNest[25,1] = 1;
+arrNest[28,1] = 1;
+/* Branch nest */
+arrNest[2,2] = 1;
+arrNest[5,2] = 1;
+arrNest[9,2] = 1;
+arrNest[11,2] = 1;
+arrNest[14,2] = 1;
+arrNest[18,2] = 1;
+arrNest[22,2] = 1;
+arrNest[26,2] = 1;
+arrNest[29,2] = 1;
+/* Single loc nest */
+arrNest[3,2] = 1;
+arrNest[6,2] = 1;
+arrNest[7,2] = 1;
+arrNest[10,2] = 1;
+arrNest[12,2] = 1;
+arrNest[16,2] = 1;
+arrNest[20,2] = 1;
+arrNest[24,2] = 1;
+arrNest[27,2] = 1;
+arrNest[31,2] = 1;
+/* Subsid nest */
+arrNest[15,2] = 1;
+arrNest[19,2] = 1;
+arrNest[23,2] = 1;
+arrNest[30,2] = 1;
+/* Other service nest */
+arrNest[1,3] = 1;
+arrNest[2,3] = 1;
+arrNest[3,3] = 1;
+/* Retail nest */
+arrNest[4,4] = 1;
+arrNest[5,4] = 1;
+arrNest[6,4] = 1;
+/* Government nest */
+arrNest[7,5] = 1;
+/* Arts nest */
+arrNest[8,5] = 1;
+arrNest[9,5] = 1;
+arrNest[10,5] = 1;
+/* Agriculture nest */
+arrNest[11,4] = 1;
+arrNest[12,4] = 1;
+/* Wholesale nest */
+arrNest[13,4] = 1;
+arrNest[14,4] = 1;
+arrNest[15,4] = 1;
+arrNest[16,4] = 1;
+/* Professional services nest */
+arrNest[17,6] = 1;
+arrNest[18,6] = 1;
+arrNest[19,6] = 1;
+arrNest[20,6] = 1;
+/* Heavy industry nest */
+arrNest[21,4] = 1;
+arrNest[22,4] = 1;
+arrNest[23,4] = 1;
+arrNest[24,4] = 1;
+/* Institutional nest */
+arrNest[25,5] = 1;
+arrNest[26,5] = 1;
+arrNest[27,5] = 1;
+/* Manufacturing nest */
+arrNest[28,4] = 1;
+arrNest[29,4] = 1;
+arrNest[30,4] = 1;
+arrNest[31,4] = 1;
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local Mu, MuMat, v, vmu3D, p13D, p23D, num, denom, denomMat, IV, p, LLR, cLLR, asc, v3D, allocateTypes, allocateNAICS, allocate;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    Mu = arrNest .* areshape(bn[NVARS+1:NVARS+NNESTS,1], 1|NNESTS);
+    Mu = areshape(Mu, NSITS|NALTS|NNESTS);
+    
+    //Create a similar matrix for allocations
+    // NEED TO UPDATE WHEN CHANGING NESTS
+    allocateTypes = atranspose(areshape(bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1], NHEAD|NALLOCATE),2|1).* arrNest[.,1:NHEAD];
+    allocateNAICS = atranspose(areshape(1-bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1], (NNESTS-NHEAD)|NALLOCATE),2|1) .* arrNest[.,NHEAD:NNESTS];
+    allocate = aconcat(allocateTypes,allocateNAICS,1);
+    
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v .* Mu).*areshape(allocate, NSITS|NALTS|NNESTS);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+
+    /* Component 2 */
+    p23D = zeros(NSITS, NNESTS);
+    denomMat = arraytomat(atranspose(denom[.,1,.], 2|1|3));
+    
+    MuMat = arraytomat(atranspose(amax(Mu, 2), 2|1|3));
+    num = denomMat ./ MuMat;
+    p23D = num ./ sumr(num);
+    // Dimension to repeat along should be given first, then columns, then rows
+    p23D = atranspose(areshape(p23D, NALTS|NSITS|NNESTS), 2|1|3);
+    
+    p = p13D .* p23D;
+    LLR = asum(p, 1);
+    LLR = arraytomat(atranspose(LLR,3|1|2));
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    // Assuming that 'cLLR' is the output of the 'ln' call
+    if iscplx(cLLR);
+        print "complex matrix sent to 'ln' 3";
+        end;
+    endif;
+    retp(cLLR[.,1]);
+    
+endp;
+
+/*------Starting Values of the Parameters-*/
+
+B={
+       1.6176206 
+       8.0429692 
+      -2.0603765 
+       6.0799796 
+       8.0337233 
+       5.5025376 
+      -2.4917758 
+       5.0945581 
+       7.2430890 
+      -1.8298515 
+     -0.20455514 
+      -1.5671985 
+       2.7367533 
+      -1.9301201 
+       6.8704149 
+      -3.2350169 
+       5.3320577 
+      -4.0280463 
+       8.5279530 
+     -0.82784574 
+       1.1028128 
+      -2.1179500 
+       7.2399617 
+      -2.4768963 
+       1.2177639 
+       8.1988030 
+      -1.3229843 
+       1.1525786 
+      -1.8631283 
+       6.6910243 
+    -0.043979609 
+    -0.059446076 
+     0.031620862 
+   -0.0087568726 
+    -0.035825132 
+     0.010269755 
+   -0.0044345992 
+    -0.011780090 
+    -0.064271607
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0
+      0.51349883 
+    0.0074718785 
+      0.53030578 
+      0.52284120 
+      0.46102105
+      0.24849462 
+      0.81686809
+       1.0000000 
+      0.82758188 
+      0.92723275 
+      0.99954898 
+      0.77754074 
+      0.99911331 
+      0.89368964 
+      0.83594006 
+      0.94781908 
+      0.84007430 
+       1.0000000 
+       1.0000000 
+       1.0000000 
+      0.99944084 
+       1.0000000 
+       1.0000000 
+       1.0000000 
+      0.99938654 
+       1.0000000 
+       1.0000000 
+      0.92488418 
+      0.99971306 
+      0.99924404 
+      0.99990535 
+      0.99965140 
+      0.78602012 
+      0.84635880 
+      0.90312574 
+      0.99858743 
+      0.99856122 
+       1.0000000 
+      0.99981292
+	};
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library cml,pgraph ;
+#include cml.ext ;
+cmlset ;
+  _CML_Active = ones(NVARS+NNESTS-1,1)|0|ones(NALLOCATE,1);
+  _CML_Bounds = -10*ones(NVARS+NNESTS,1)~10*ones(NVARS+NNESTS,1)|0*ones(NALLOCATE,1)~ones(NALLOCATE,1);
+  _CML_Algorithm=2;  /* 1=BFGS, 2=DFP, 3=Newton, 4=BHHH */
+  _CML_LineSearch=2;
+  _CMl_DirTol=5e-4;
+  _CML_MaxIters=1500;
+  _CML_CovPar=2;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+  _CML_Switch = {1,
+                0.00001,
+                1500,
+                0.0001};
+__title = "GTA Firms Cross Nested Location Choice";
+
+{ coeff,f,g,cov,ret } = cmlprt(cml(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_cml_FinalHess);
+print cov;
+
+//===============================================================================
+//                    GTA Firms Cross Nested Location Choice                     
+//===============================================================================
+// MAXLIK Version 5.0.9                                      8/01/2018  10:39 pm
+//===============================================================================
+
+//return code =    0
+//normal convergence
+
+//Mean log-likelihood      -0.0783462
+//Number of cases     642878
+
+//Covariance matrix of the parameters computed by the following method:
+//Cross-product of first derivatives
+
+//Parameters    Estimates     Std. err.  Est./s.e.  Prob.    Gradient
+//------------------------------------------------------------------
+//P01              1.4788        0.6274    2.357   0.0184      0.0000
+//P02              7.8015        0.5697   13.693   0.0000      0.0000
+//P03             -2.0705        1.0932   -1.894   0.0582      0.0000
+//P04              6.4105        0.5674   11.298   0.0000      0.0001
+//P05              7.8465        0.5710   13.741   0.0000      0.0000
+//P06              5.6183        0.5721    9.821   0.0000      0.0000
+//P07             -2.4841        1.4612   -1.700   0.0891      0.0000
+//P08              5.3586        0.5700    9.401   0.0000      0.0001
+//P09              7.2143        0.5682   12.698   0.0000      0.0000
+//P10             -1.8167        1.3307   -1.365   0.1722      0.0000
+//P11             -0.2275        0.7497   -0.304   0.7615      0.0000
+//P12             -1.5942        0.9347   -1.706   0.0881      0.0000
+//P13              2.6365        0.6104    4.319   0.0000      0.0000
+//P14             -1.9334        1.0686   -1.809   0.0704      0.0000
+//P15              6.9913        0.5681   12.306   0.0000      0.0000
+//P16             -3.3457        0.7457   -4.487   0.0000      0.0000
+//P17              5.7068        0.5673   10.060   0.0000      0.0001
+//P18             -4.0772        0.8592   -4.745   0.0000      0.0000
+//P19              8.3043        0.5726   14.502   0.0000      0.0000
+//P20             -0.8669        0.8063   -1.075   0.2823      0.0000
+//P21              1.0461        0.6775    1.544   0.1226      0.0000
+//P22             -2.1095        1.4901   -1.416   0.1569      0.0000
+//P23              7.2535        0.5691   12.745   0.0000      0.0000
+//P24             -2.4708        1.4295   -1.728   0.0839      0.0000
+//P25              1.0752        0.6558    1.639   0.1011      0.0000
+//P26              7.8979        0.5701   13.855   0.0000     -0.0001
+//P27             -1.3393        0.9212   -1.454   0.1460      0.0000
+//P28              1.0644        0.6532    1.629   0.1032      0.0000
+//P29             -1.8716        1.0125   -1.848   0.0645      0.0000
+//P30              6.8107        0.5685   11.979   0.0000      0.0000
+//P31             -0.0161        0.0189   -0.852   0.3940     -0.0001
+//P32             -0.0065        0.0133   -0.487   0.6264     -0.0001
+//P33              0.0048        0.0060    0.803   0.4219     -0.0003
+//P34             -0.0066        0.0031   -2.095   0.0362      0.0000
+//P35             -0.0167        0.0085   -1.957   0.0503      0.0000
+//P36              0.0091        0.0041    2.212   0.0270     -0.0001
+//P37             -0.0013        0.0054   -0.243   0.8080      0.0000
+//P38              0.0004        0.0122    0.031   0.9752      0.0002
+//P39             -0.0271        0.0198   -1.366   0.1720     -0.0002
+//P40              0.3714        0.0123   30.251   0.0000      0.0001
+//P41              0.0013        0.0034    0.373   0.7092      0.0005
+//P42              0.4587        0.0401   11.427   0.0000      0.0000
+//P43              0.3074        0.0413    7.441   0.0000     -0.0001
+//P44              0.3015        0.0405    7.436   0.0000      0.0000
+//P45              0.3224        0.0513    6.278   0.0000      0.0000
+//P46              0.6644        0.0364   18.262   0.0000     -0.0001
+//P47              0.6636        0.0368   18.031   0.0000      0.0000
+//P48              0.6981        0.0294   23.768   0.0000     -0.0001
+//P49              0.6808        0.0377   18.071   0.0000      0.0001
+//P50              0.7212        0.0285   25.340   0.0000     -0.0002
+//P51              0.7125        0.0281   25.330   0.0000      0.0000
+//P52              0.7047        0.0320   22.010   0.0000      0.0002
+//P53              0.7122        0.0358   19.915   0.0000      0.0000
+//P54              1.0000             .        .        .      0.0004
+//P55              0.6068        0.1731    3.505   0.0005      0.0000
+//P56              0.5277        0.1604    3.289   0.0010      0.0000
+//P57              0.4692        0.1777    2.641   0.0083      0.0000
+//P58              0.6522        0.1635    3.989   0.0001      0.0000
+//P59              0.4478        0.1914    2.340   0.0193      0.0000
+//P60              0.5277        0.1675    3.150   0.0016      0.0000
+//P61              0.6228        0.1222    5.097   0.0000      0.0000
+//P62              0.6523        0.1348    4.838   0.0000      0.0000
+//P63              0.6393        0.1167    5.477   0.0000      0.0000
+//P64              0.5281        0.1472    3.587   0.0003      0.0000
+//P65              0.5119        0.1642    3.117   0.0018      0.0000
+//P66              0.4543        0.1805    2.516   0.0119      0.0000
+//P67              0.6963        0.1111    6.265   0.0000      0.0000
+//P68              0.6355        0.1115    5.700   0.0000      0.0001
+//P69              0.5772        0.1291    4.472   0.0000     -0.0001
+//P70              0.6331        0.1125    5.630   0.0000      0.0001
+//P71              0.6691        0.1198    5.586   0.0000      0.0000
+//P72              0.5989        0.1209    4.955   0.0000      0.0001
+//P73              0.5603        0.1322    4.238   0.0000     -0.0001
+//P74              0.6081        0.1184    5.135   0.0000      0.0001
+//P75              0.6375        0.1391    4.582   0.0000      0.0000
+//P76              0.5962        0.1288    4.630   0.0000      0.0000
+//P77              0.5545        0.1420    3.904   0.0001     -0.0001
+//P78              0.5911        0.1300    4.545   0.0000      0.0001
+//P79              0.7297        0.1219    5.987   0.0000      0.0000
+//P80              0.6377        0.1294    4.928   0.0000      0.0000
+//P81              0.6294        0.1332    4.726   0.0000      0.0000
+//P82              0.9651        0.0166   57.999   0.0000      0.0000
+//P83              0.9506        0.0206   46.157   0.0000      0.0001
+//P84              0.9578        0.0183   52.418   0.0000      0.0000
+//P85              0.9415        0.0241   39.140   0.0000     -0.0003
+
+//===============================================================================
+//                    GTA Firms Cross Nested Location Choice                     
+//===============================================================================
+// CML Version 2.0.9                                         8/02/2018   9:13 pm
+//===============================================================================
+
+//return code =    0
+//normal convergence
+
+//Mean log-likelihood      -0.0781577
+//Number of cases     642878
+
+//Covariance of the parameters computed by the following method:
+//Cross-product of first derivatives
+
+//Parameters    Estimates     Std. err.    Gradient
+//------------------------------------------------------------------
+//P01              1.6176        1.1279      0.0000
+//P02              8.0429        0.2945      0.0000
+//P03             -2.0604        1.6881      0.0000
+//P04              6.0800        0.5437      0.0000
+//P05              8.0337        0.2956      0.0000
+//P06              5.5025        0.6214      0.0000
+//P07             -2.4918        1.9600      0.0000
+//P08              5.0945        0.6730      0.0001
+//P09              7.2431        0.3949      0.0000
+//P10             -1.8299        1.8276      0.0000
+//P11             -0.2046        1.3961      0.0000
+//P12             -1.5672        1.5876      0.0000
+//P13              2.7368        0.9828      0.0000
+//P14             -1.9301        1.6916      0.0000
+//P15              6.8704        0.4424      0.0000
+//P16             -3.2350        1.7626      0.0000
+//P17              5.3320        0.6400      0.0000
+//P18             -4.0280        1.8881      0.0000
+//P19              8.5281        0.2356     -0.0001
+//P20             -0.8278        1.4784      0.0000
+//P21              1.1028        1.2060      0.0000
+//P22             -2.1180        1.8603      0.0000
+//P23              7.2400        0.3960      0.0000
+//P24             -2.4769        1.9009      0.0000
+//P25              1.2178        1.1813      0.0000
+//P26              8.1987        0.2757      0.0001
+//P27             -1.3230        1.5596      0.0000
+//P28              1.1526        1.1951      0.0000
+//P29             -1.8631        1.6636      0.0000
+//P30              6.6911        0.4659      0.0000
+//P31             -0.0438        0.0229     -0.0002
+//P32             -0.0591        0.0171     -0.0003
+//P33              0.0314        0.0088      0.0003
+//P34             -0.0086        0.0038     -0.0001
+//P35             -0.0353        0.0116     -0.0005
+//P36              0.0102        0.0055      0.0001
+//P37             -0.0045        0.0066      0.0000
+//P38             -0.0119        0.0183      0.0001
+//P39             -0.0641        0.0241     -0.0002
+//P40              0.5140        0.0672     -0.0005
+//P41              0.0075        0.0044      0.0000
+//P42              0.5303        0.0689      0.0000
+//P43              0.5228        0.0677      0.0000
+//P44              0.5196        0.0680     -0.0001
+//P45              0.4610        0.3286      0.0000
+//P46              0.7759        0.1487      0.0000
+//P47              0.7753        0.1489      0.0000
+//P48              0.2779        1.1592      0.0000
+//P49              0.2485        2.4982      0.0000
+//P50              0.8169        0.1341      0.0000
+//P51              0.8104        0.1363      0.0000
+//P52              1.0000        0.0895      0.0000
+//P53              0.8276        0.0562      0.0000
+//P54              0.9274        0.2650     -0.0002
+//P55              0.9995        0.0451      0.0000
+//P56              0.7776        0.0519     -0.0001
+//P57              0.9991        0.0448      0.0000
+//P58              0.8937        0.0408      0.0000
+//P59              0.8360        0.0377     -0.0001
+//P60              0.9478        0.0606      0.0000
+//P61              0.8401        0.0366     -0.0001
+//P62              1.0000             .      0.0000
+//P63              1.0000             .     -0.0001
+//P64              1.0000             .      0.0000
+//P65              0.9994        0.0626      0.0000
+//P66              1.0000             .      0.0000
+//P67              1.0000             .     -0.0001
+//P68              1.0000             .      0.0000
+//P69              0.9994        0.0632      0.0000
+//P70              1.0000             .      0.0000
+//P71              1.0000             .      0.0000
+//P72              0.9250        0.2539     -0.0001
+//P73              0.9997        0.0632      0.0000
+//P74              0.9992        0.0425      0.0000
+//P75              0.9999        0.0459      0.0000
+//P76              0.9996        0.0434      0.0000
+//P77              0.7862        0.0510     -0.0001
+//P78              0.8464        0.0383     -0.0001
+//P79              0.9032        0.0412      0.0000
+//P80              0.9985        0.0647      0.0001
+//P81              0.9985        0.0468      0.0001
+//P82              1.0000             .     -0.0222
+//P83              0.9998        0.0475      0.0000

@@ -1,0 +1,329 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     July 21, 2018
+               Nested model by NAICS with variables
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+// I think the combination of similarly valued parameters can be accomplished by switching to a manual definition and shifting the 1 for a 
+// NAICS alternative, or similar, to the corresponding column/row.
+
+@ Setting the output file @
+output file = "/home/jason/Documents/Conference Submissions/TRB2019/outputs/output2.out";
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5433);
+dbSetDatabaseName(id, "ggha_business_2017");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, parcel_id, naics_cnl_ct, naics_3d_ct, naics_8d_ct, naics_cnl, alt_id, tot_sales_emp,
+                build_area, height, shop_trips, pop, credit_id FROM public.working_data_cnl_10_per ORDER BY sid");
+@---Array columns: 1: sid, 2: chosen, 3: parcel_id, 4: naics_cnl_ct, 5: naics_3d_ct, 6: naics_8d_Ct, 7: naics_cnl, 8: alt_id,
+               9: tot_sales_emp, 10: build_area, 11: height, 12: shop_trips, 13: pop, 14: credit_id ---@
+INPUT =  dbQueryFetchAllM(qid);
+//INPUT = csvReadM("data.csv", 2);
+save INPUT;
+dbClose(id);
+
+NOBS =rows(INPUT);
+NHEAD = 2;
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 31;
+NASC = NALTS - 1;
+NSITS = NOBS / NALTS;
+NNESTS = 5;
+NALLOCATE = 31;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = NASC+NNAICS+4;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS);
+threadfor i(1, NASC, 1);
+    DATA[., i] = (INPUT[., 8].==i+1);
+threadendfor;
+
+naics = zeros(NOBS, NNAICS);
+naicsCodes = {2,3,42,44,5,6,7,8,9};
+threadfor i(1, rows(naicsCodes), 1);
+    naics[., i] = (INPUT[., 7].==naicsCodes[i]);
+threadendfor;
+
+// Area of building and industry code (by naics_cnl). Can also use height and volume.
+//datArea = INPUT[., 10] ./ 10^3;
+//datHeight = INPUT[., 11];
+//datVol = datArea .* datHeight;
+//DATA[., NASC+1:NASC+NNAICS] = naics .* datArea;
+//// Number of shopping trips (logged)
+//DATA[., NASC+1:NASC+NNAICS] = naics .* ln(INPUT[., 12]);
+// Population of area (logged)
+DATA[., NASC+1:NASC+NNAICS] = naics .* ln(INPUT[., 13]);
+
+// Count the number of similar firms (by naics_cnl) as 100s within 500m. Different industries different distances?
+DATA[., NASC+NNAICS+1] = INPUT[., 4] ./ 10^2;
+// Total sales per employee
+DATA[., NASC+NNAICS+2] = ln(INPUT[., 9]);
+// Assuming that 'x' is the output of the 'ln' call
+x = DATA[., NASC+NNAICS+2];
+if iscplx(x);
+    print "complex matrix sent to 'ln' 1";
+    end;
+endif;
+// Credit rating id of firm (very good or excellent wrt good)
+threadfor i(1, 2, 1);
+    DATA[., NASC+NNAICS+2+i] = (INPUT[., 14].==i+1);
+threadendfor;
+
+arrNest = zeros(NALTS, NNESTS);
+/* Head nest */
+arrNest[1,1] = 1;
+arrNest[4,1] = 1;
+arrNest[8,1] = 1;
+arrNest[13,1] = 1;
+arrNest[17,1] = 1;
+arrNest[21,1] = 1;
+arrNest[25,1] = 1;
+arrNest[28,1] = 1;
+/* Branch nest */
+arrNest[2,2] = 1;
+arrNest[5,2] = 1;
+arrNest[9,2] = 1;
+arrNest[11,2] = 1;
+arrNest[14,2] = 1;
+arrNest[18,2] = 1;
+arrNest[22,2] = 1;
+arrNest[26,2] = 1;
+arrNest[29,2] = 1;
+/* Single loc nest */
+arrNest[3,2] = 1;
+arrNest[6,2] = 1;
+arrNest[7,2] = 1;
+arrNest[10,2] = 1;
+arrNest[12,2] = 1;
+arrNest[16,2] = 1;
+arrNest[20,2] = 1;
+arrNest[24,2] = 1;
+arrNest[27,2] = 1;
+arrNest[31,2] = 1;
+/* Subsid nest */
+arrNest[15,2] = 1;
+arrNest[19,2] = 1;
+arrNest[23,2] = 1;
+arrNest[30,2] = 1;
+/* Other service nest */
+arrNest[1,3] = 1;
+arrNest[2,3] = 1;
+arrNest[3,3] = 1;
+/* Retail nest */
+arrNest[4,5] = 1;
+arrNest[5,5] = 1;
+arrNest[6,5] = 1;
+/* Government nest */
+arrNest[7,3] = 1;
+/* Arts nest */
+arrNest[8,3] = 1;
+arrNest[9,3] = 1;
+arrNest[10,3] = 1;
+/* Agriculture nest */
+arrNest[11,4] = 1;
+arrNest[12,4] = 1;
+/* Wholesale nest */
+arrNest[13,5] = 1;
+arrNest[14,5] = 1;
+arrNest[15,5] = 1;
+arrNest[16,5] = 1;
+/* Professional services nest */
+arrNest[17,3] = 1;
+arrNest[18,3] = 1;
+arrNest[19,3] = 1;
+arrNest[20,3] = 1;
+/* Heavy industry nest */
+arrNest[21,4] = 1;
+arrNest[22,4] = 1;
+arrNest[23,4] = 1;
+arrNest[24,4] = 1;
+/* Institutional nest */
+arrNest[25,3] = 1;
+arrNest[26,3] = 1;
+arrNest[27,3] = 1;
+/* Manufacturing nest */
+arrNest[28,4] = 1;
+arrNest[29,4] = 1;
+arrNest[30,4] = 1;
+arrNest[31,4] = 1;
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local Mu, MuMat, v, vmu3D, p13D, p23D, num, denom, denomMat, IV, p, LLR, cLLR, asc, v3D, baseAllocate, allocateTypes, allocateNAICS, allocate;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    Mu = 1+exp(bn[NVARS+1:NVARS+NNESTS,1]);
+    Mu = arrNest .* areshape(Mu, 1|NNESTS);
+    Mu = areshape(Mu, NSITS|NALTS|NNESTS);
+    
+    //Create a similar matrix for allocations
+    baseAllocate = exp(bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1]) ./ (1 + exp(bn[NVARS+NNESTS+1:NVARS+NNESTS+NALLOCATE,1]));
+    allocateTypes = atranspose(areshape(baseAllocate, NHEAD|NALLOCATE),2|1).* arrNest[.,1:NHEAD];
+    allocateNAICS = atranspose(areshape(1-baseAllocate, (NNESTS-NHEAD)|NALLOCATE),2|1) .* arrNest[.,NHEAD:NNESTS];
+    allocate = aconcat(allocateTypes,allocateNAICS,1);
+    
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v .* Mu).*areshape(allocate, NSITS|NALTS|NNESTS);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+
+    /* Component 2 */
+    p23D = zeros(NSITS, NNESTS);
+    denomMat = arraytomat(atranspose(denom[.,1,.], 2|1|3));
+    
+    MuMat = arraytomat(atranspose(amax(Mu, 2), 2|1|3));
+    num = denomMat ./ MuMat;
+    p23D = num ./ sumr(num);
+    // Dimension to repeat along should be given first, then columns, then rows
+    p23D = atranspose(areshape(p23D, NALTS|NSITS|NNESTS), 2|1|3);
+    
+    p = p13D .* p23D;
+    LLR = asum(p, 1);
+    LLR = arraytomat(atranspose(LLR,3|1|2));
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    // Assuming that 'cLLR' is the output of the 'ln' call
+    if iscplx(cLLR);
+        print "complex matrix sent to 'ln' 3";
+        end;
+    endif;
+    retp(cLLR[.,1]);
+    
+endp;
+
+/*------Starting Values of the Parameters-*/
+
+B={        0.61344928 
+       2.0378348 
+      -1.4295983 
+       1.7055648 
+       2.1503474 
+       1.3304197 
+      -1.9264650 
+       1.1676636 
+       1.7360199 
+      -2.2357689 
+      -1.0962781 
+     -0.36245663 
+       1.0526554 
+     -0.83279898 
+       2.1507275 
+      0.35135941 
+       1.5164505 
+     -0.41092663 
+       2.2593877 
+      0.41692461 
+      0.39076945 
+      -1.3379203 
+       2.0641350 
+      -2.2045997 
+      0.36554502 
+       1.8919111 
+     -0.32079006 
+      0.53430230 
+     -0.34848573 
+       2.1665055 
+      0.11461000 
+     0.073376169 
+     0.086808966 
+      0.12959439 
+      0.13107240 
+      0.17168193 
+      0.16088113 
+      0.14397485 
+      0.15606200 
+      0.12769764 
+    0.0024701882 
+    -0.015645067 
+   -0.0088503363 
+      0.26429172 
+      0.24286452 
+      -1.7759272 
+      -1.3211175 
+  1.0000000e-200 
+      0.40424847 
+     0.014456250 
+     0.061079468 
+     0.087187955 
+     -0.46538834 
+     -0.50103375 
+      0.37408675 
+      0.24281687 
+    0.0078929283 
+     0.072045165 
+      0.23660125 
+      0.26009896 
+      0.18549272 
+      0.60182676 
+      0.72535911 
+     -0.34587437 
+      0.19398200 
+      0.52310121 
+      0.21947988 
+      0.19828557 
+      0.14719420 
+      0.20382630 
+      0.20165238 
+    -0.052157578 
+    -0.012763461 
+     0.057027997 
+      0.14487616 
+    -0.082121001 
+      0.10266613 
+      0.11835702 
+     0.067461931
+   };
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library maxlik,pgraph ;
+#include maxlik.ext ;
+maxset ;
+  _max_Active = ones(NVARS+NNESTS-1,1)|0|ones(NALLOCATE,1);
+  _max_Algorithm=2;  /* 1=STEEP, 2=BFGS, 3=DFP, 4=NEWTON, 5=BHHH, 6=PRCG */
+  _max_LineSearch=2;
+  _max_GradTol=5e-4;
+  _max_MaxIters=1500;
+  _max_CovPar=2;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+//  _max_Switch = {2,
+//                0.00001,
+//                1500,
+//                0.0001};
+__title = "GTA Firms Nested Location Choice";
+
+{ coeff,f,g,cov,ret } = maxprt(maxlik(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_max_FinalHess);
+print cov;

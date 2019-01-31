@@ -1,0 +1,342 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     July 21, 2018
+               Cross nested model with variables (add allocation terms)
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+@ Setting the output file @
+output file = "/home/jason/Documents/Conference Submissions/TRB2019/outputs/output2.out";
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5433);
+dbSetDatabaseName(id, "ggha_business_2017");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, parcel_id, naics_cnl_ct, naics_3d_ct, naics_8d_ct, naics_cnl, alt_id, tot_sales_emp,
+                build_area, height, area_ind, area_res FROM public.working_data_cnl_10_per ORDER BY sid");
+@---Array columns: 1: sid, 2: chosen, 3: parcel_id, 4: naics_cnl_ct, 5: naics_3d_ct, 6: naics_8d_Ct, 7: naics_cnl, 8: alt_id,
+               9: tot_sales_emp, 10: build_area, 11: height, 12: area_ind, 13: area_res ---@
+INPUT =  dbQueryFetchAllM(qid);
+//INPUT = csvReadM("data.csv", 2);
+save INPUT;
+dbClose(id);
+
+NOBS =rows(INPUT);
+NHEAD = 4;
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 31;
+NASC = NALTS - 1;
+NSITS = NOBS / NALTS;
+NNESTS = 9;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = NASC+NNAICS+2;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS);
+threadfor i(1, NASC, 1);
+    DATA[., i] = (INPUT[., 8].==i+1);
+threadendfor;
+
+naics = zeros(NOBS, NNAICS);
+naicsCodes = {2,3,42,44,5,6,7,8,9};
+threadfor i(1, rows(naicsCodes), 1);
+    DATA[., NASC+i] = (INPUT[., 7].==naicsCodes[i]);
+threadendfor;
+
+// Area of parcel and industry code (by naics_cnl). Can also use height and volume.
+datArea = INPUT[., 10] ./ 10^3;
+datHeight = INPUT[., 11];
+datVol = datArea .* datHeight;
+DATA[., NASC+1:NASC+NNAICS] = DATA[., NASC+1:NASC+NNAICS] .* datArea;
+
+// Count the number of similar firms (by naics_cnl) as 100s
+DATA[., NASC+NNAICS+1] = INPUT[., 4] ./ 10^2;
+// Total sales per employee
+DATA[., NASC+NNAICS+2] = log(INPUT[., 9]);
+
+arrNest = zeros(NALTS, NNESTS);
+/* Head nest start with just nested */
+arrNest[1,1] = 1;
+arrNest[4,1] = 1;
+arrNest[8,1] = 1;
+arrNest[13,1] = 1;
+arrNest[17,1] = 1;
+arrNest[21,1] = 1;
+arrNest[25,1] = 1;
+arrNest[28,1] = 1;
+/* Branch nest */
+arrNest[2,2] = 1;
+arrNest[5,2] = 1;
+arrNest[9,2] = 1;
+arrNest[11,2] = 1;
+arrNest[14,2] = 1;
+arrNest[18,2] = 1;
+arrNest[22,2] = 1;
+arrNest[26,2] = 1;
+arrNest[29,2] = 1;
+/* Single loc nest */
+arrNest[3,2] = 1;
+arrNest[6,2] = 1;
+arrNest[7,2] = 1;
+arrNest[10,2] = 1;
+arrNest[12,2] = 1;
+arrNest[16,2] = 1;
+arrNest[20,2] = 1;
+arrNest[24,2] = 1;
+arrNest[27,2] = 1;
+arrNest[31,2] = 1;
+/* Subsid nest */
+arrNest[15,2] = 1;
+arrNest[19,2] = 1;
+arrNest[23,2] = 1;
+arrNest[30,2] = 1;
+/* Other service nest */
+arrNest[1,3] = 1;
+arrNest[2,3] = 1;
+arrNest[3,3] = 1;
+/* Retail nest */
+arrNest[4,4] = 1;
+arrNest[5,4] = 1;
+arrNest[6,4] = 1;
+/* Government nest */
+arrNest[7,3] = 1;
+/* Arts nest */
+arrNest[8,5] = 1;
+arrNest[9,5] = 1;
+arrNest[10,5] = 1;
+/* Agriculture nest */
+arrNest[11,6] = 1;
+arrNest[12,6] = 1;
+/* Wholesale nest */
+arrNest[13,7] = 1;
+arrNest[14,7] = 1;
+arrNest[15,7] = 1;
+arrNest[16,7] = 1;
+/* Professional services nest */
+arrNest[17,8] = 1;
+arrNest[18,8] = 1;
+arrNest[19,8] = 1;
+arrNest[20,8] = 1;
+/* Heavy industry nest */
+arrNest[21,6] = 1;
+arrNest[22,6] = 1;
+arrNest[23,6] = 1;
+arrNest[24,6] = 1;
+/* Institutional nest */
+arrNest[25,9] = 1;
+arrNest[26,9] = 1;
+arrNest[27,9] = 1;
+/* Manufacturing nest */
+arrNest[28,6] = 1;
+arrNest[29,6] = 1;
+arrNest[30,6] = 1;
+arrNest[31,6] = 1;
+
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local Mu, MuMat, v, vmu3D, p13D, p23D, num, denom, denomMat, IV, p, LLR, cLLR, asc, v3D;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    Mu = arrNest .* areshape(bn[NVARS+1:NVARS+NNESTS,1], 1|NNESTS);
+    Mu = areshape(Mu, NSITS|NALTS|NNESTS);
+
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v .* Mu).* areshape(arrNest, NSITS|NALTS|NNESTS);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+
+    /* Component 2 */
+    p23D = zeros(NSITS, NNESTS);
+    denomMat = arraytomat(atranspose(denom[.,1,.], 2|1|3));
+    IV = log(denomMat);
+    MuMat = arraytomat(atranspose(amax(Mu, 2), 2|1|3));
+    num = IV ./ MuMat;
+    p23D = num ./ sumr(num);
+    // Dimension to repeat along should be given first, then columns, then rows
+    p23D = atranspose(areshape(p23D, NALTS|NSITS|NNESTS), 2|1|3);
+    
+    p = p13D .* p23D;
+    LLR = asum(p, 1);
+    LLR = arraytomat(atranspose(LLR,3|1|2));
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    retp(cLLR[.,1]);
+    
+endp;
+
+/*------Starting Values of the Parameters-*/
+
+B={
+       1.1281060 
+       8.0258274 
+      -2.0497263 
+       6.4830517 
+       7.9654102 
+       5.9407518 
+      -2.4419844 
+       5.0545035 
+       7.9764359 
+      -1.7677460 
+     -0.26770527 
+      -1.6058049 
+       2.2256550 
+      -1.9038704 
+       7.9607271 
+      -3.4900886 
+       4.7554357 
+      -4.0809639 
+       8.0482132 
+     -0.86621175 
+      0.88947068 
+      -2.0604856 
+       8.0296880 
+      -2.4269604 
+      0.77659050 
+       7.9686157 
+      -1.3445642 
+      0.84246421 
+      -1.8552540 
+       7.8695124 
+    -0.015655681 
+    -0.024139409 
+   -0.0058494063 
+    -0.018448256 
+    -0.068314306 
+    0.0061833462 
+    -0.025473817 
+    -0.048126649 
+     -0.16784650 
+       4.5130064 
+    -0.046518889 
+      0.98587492 
+      0.96094538 
+      0.87741444 
+      0.99361276 
+      0.99128031 
+      0.92152591 
+      0.98187307 
+      0.98431985 
+       1.0000000
+	};
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library maxlik,pgraph ;
+#include maxlik.ext ;
+maxset ;
+  _max_Active = ones(NVARS+NNESTS-1,1)|0;
+  _max_Algorithm=2;  /* 1=STEEP, 2=BFGS, 3=DFP, 4=NEWTON, 5=BHHH, 6=PRCG */
+  _max_LineSearch=2;
+  _max_GradTol=5e-4;
+  _max_MaxIters=1500;
+  _max_CovPar=2;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+//  _max_Switch = {2,
+//                0.00001,
+//                1500,
+//                0.0001};
+__title = "GTA Firms Cross Nested Location Choice";
+
+{ coeff,f,g,cov,ret } = maxprt(maxlik(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_max_FinalHess);
+print cov;
+
+//===============================================================================
+//                    GTA Firms Cross Nested Location Choice                     
+//===============================================================================
+// MAXLIK Version 5.0.9                                      7/25/2018   1:16 am
+//===============================================================================
+
+//return code =    0
+//normal convergence
+
+//Mean log-likelihood      -0.0718889
+//Number of cases     642878
+
+//Covariance matrix of the parameters computed by the following method:
+//Cross-product of first derivatives
+
+//Parameters    Estimates     Std. err.  Est./s.e.  Prob.    Gradient
+//------------------------------------------------------------------
+//P01              1.1273        0.2581    4.368   0.0000      0.0000
+//P02              8.0248        0.1949   41.175   0.0000      0.0000
+//P03             -2.0496        0.2953   -6.941   0.0000      0.0000
+//P04              6.4836        0.1966   32.982   0.0000      0.0000
+//P05              7.9675        0.1951   40.837   0.0000      0.0000
+//P06              5.9387        0.2096   28.337   0.0000      0.0000
+//P07             -2.4419        0.5697   -4.286   0.0000      0.0000
+//P08              5.0524        0.2067   24.448   0.0000      0.0000
+//P09              7.9793        0.1953   40.863   0.0000      0.0001
+//P10             -1.7677        1.1912   -1.484   0.1378      0.0000
+//P11             -0.2678        0.3099   -0.864   0.3874      0.0000
+//P12             -1.6059        0.4462   -3.599   0.0003      0.0000
+//P13              2.2245        0.2383    9.336   0.0000      0.0000
+//P14             -1.9038        0.4428   -4.300   0.0000      0.0000
+//P15              7.9640        0.1955   40.737   0.0000      0.0000
+//P16             -3.4894        0.2775  -12.573   0.0000      0.0000
+//P17              4.7549        0.1954   24.332   0.0000      0.0000
+//P18             -4.0802        0.3649  -11.181   0.0000      0.0000
+//P19              8.0491        0.1952   41.233   0.0000      0.0000
+//P20             -0.8663        0.3381   -2.562   0.0104      0.0000
+//P21              0.8890        0.2716    3.273   0.0011      0.0000
+//P22             -2.0604        0.5763   -3.575   0.0003      0.0000
+//P23              8.0303        0.1957   41.029   0.0000     -0.0001
+//P24             -2.4269        1.0653   -2.278   0.0227      0.0000
+//P25              0.7761        0.2242    3.462   0.0005      0.0000
+//P26              7.9675        0.1944   40.981   0.0000      0.0001
+//P27             -1.3446        0.3328   -4.040   0.0001      0.0000
+//P28              0.8418        0.2984    2.821   0.0048      0.0000
+//P29             -1.8552        0.5215   -3.558   0.0004      0.0000
+//P30              7.8735        0.1959   40.196   0.0000      0.0000
+//P31             -0.0170        0.0103   -1.658   0.0973     -0.0001
+//P32             -0.0213        0.0091   -2.343   0.0191     -0.0001
+//P33             -0.0052        0.0082   -0.642   0.5209      0.0001
+//P34             -0.0200        0.0029   -6.934   0.0000     -0.0001
+//P35             -0.0592        0.0078   -7.581   0.0000      0.0000
+//P36             -0.0014        0.0033   -0.414   0.6789     -0.0001
+//P37             -0.0288        0.0073   -3.953   0.0001      0.0000
+//P38             -0.0512        0.0146   -3.512   0.0004      0.0000
+//P39             -0.1743        0.0366   -4.762   0.0000      0.0000
+//P40              4.5448        0.0628   72.403   0.0000      0.0000
+//P41             -0.0103        0.0046   -2.252   0.0243     -0.0001
+//P42              5.8304        0.8466    6.887   0.0000      0.0000
+//P43             13.1472        1.1441   11.491   0.0000      0.0000
+//P44              0.4480        0.0114   39.383   0.0000      0.0000
+//P45              0.5153        0.0158   32.675   0.0000      0.0000
+//P46              0.4228        0.0111   38.006   0.0000      0.0000
+//P47              0.6007        0.0249   24.146   0.0000      0.0000
+//P48              0.3871        0.0096   40.490   0.0000      0.0000
+//P49              0.4212        0.0120   35.112   0.0000      0.0000
+//P50              0.4215        0.0110   38.353   0.0000      0.0000
+//P51              0.4766        0.0137   34.762   0.0000      0.0000
+//P52              1.0000             .        .        .      0.0011
