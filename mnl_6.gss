@@ -1,0 +1,266 @@
+/*--------------------------------------------------------------------
+					This is model for
+--------------	Firm Location Choice Model---------------------------
+					Jason Hawkins
+				     Jan 29, 2019
+               Add latent auction prices to MNL bid-rent model
+----------------------------------------------------------------------*/
+new;
+cls;
+screen on;
+
+// I think the combination of similarly valued parameters can be accomplished by switching to a manual definition and shifting the 1 for a 
+// NAICS alternative, or similar, to the corresponding column/row.
+
+@--------Loading the data-----------------------------------------------@
+id = dbAddDatabase("PSQL");
+dbSetHostName(id, "localhost");
+dbSetPort(id, 5432);
+dbSetDatabaseName(id, "ggha_commercial");
+dbSetUserName(id, "postgres");
+dbSetPassword(id, "postgres");
+ret = dbOpen(id);
+
+qid = dbExecQuery(id, "SELECT sid, chosen, naics_cnl_ct_1km, naics_3d_ct_1km, naics_cnl, alt_id, tot_sales_emp,
+                bld_area, taz_pop, credit_id, gross_rent, taz_area, head_id, taz_area_com, taz_area_res, taz_area_ind,
+                d_train_go, d_train_ttc, d_lrt_ttc, d_bus_go, d_train_ind, naics_3d_ct_taz, naics_2d, head_ct FROM public.working_data_1_per ORDER BY sid, alt_id");
+@---Array columns: 1: sid, 2: chosen, 3: naics_cnl_ct_1km, 4: naics_3d_ct_1km, 5: naics_cnl, 6: alt_id,
+               7: tot_sales_emp, 8: build_area, 9: taz_pop, 10: credit_id, 11: gross_rent, 12: taz_area,
+               13: head_id, 14: taz_area_com, 15: taz_area_res, 16: taz_area_ind, 17: d_train_go, 18: d_train_ttc,
+               19: d_lrt_ttc, 20: d_bus_go, 21: d_train_ind, 22: naics_3d_ct_taz, 23: naics_2d, 24: head_ct ---@
+INPUT =  dbQueryFetchAllM(qid);
+save INPUT;
+dbClose(id);
+
+load INPUT;
+
+NOBS =rows(INPUT);
+NHEAD = 2;  // 4 - 1 for identification since area held constant for all alternatives
+NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
+NALTS = 60;
+NALTS_C = 22; // 30 - 1 for identification since area held constant for all alternatives
+NSITS = NOBS / NALTS;
+NNESTS = 1;
+// CHECK ME: need to update when adding/removing variables!
+NVARS = 20;
+
+// Indicates whether to include latent auction component (normal dist)
+INC_RENTS = 1;
+
+vChosen = INPUT[., 2];
+chosen = reshape(vChosen, NSITS, NALTS);
+
+DATA = zeros(NOBS, NVARS+1);
+
+// When combining, could switch out alt_id to combine, so series from 1-28 for example
+//alts = zeros(NOBS, NALTS_C);
+//valt_area = INPUT[., 6];
+//// Combine alt_ids: 8, 9, 10, 12, 13, 19, 21 into 6
+//threadfor i(1, NOBS, 1);
+//    if (valt_area[i] == 8 or valt_area[i] == 9 or valt_area[i] == 10 or valt_area[i] == 12 or valt_area[i] == 13 or valt_area[i] == 19 or valt_area[i] == 21);
+//        valt_area[i] = 6;
+//    endif;
+//threadendfor;
+//altCodes = seqa(1,1,5)|6|7|11|14|15|16|17|18|20|seqa(22,1,8);
+//threadfor i(1, rows(altCodes), 1);
+//    alts[., i] = (valt_area.==altCodes[i]);
+//threadendfor;
+
+valt_agr = INPUT[., 5];
+threadfor i(1, NOBS, 1);
+    if valt_agr[i] == 1;
+        valt_agr[i] = 2;
+    endif;
+threadendfor;
+
+// Head code and area of building
+altCodes1 = {1};
+head_alts = zeros(NOBS, rows(altCodes1));
+threadfor i(1, rows(altCodes1), 1);
+    head_alts[., i] = (INPUT[., 13].==altCodes1[i]);
+threadendfor;
+
+// Area of building (100s of sqm)
+DATA[., 1:rows(altCodes1)] = head_alts .* INPUT[., 8] ./ 10^2;
+
+// NAICS code and population density
+altCodes2 = {44,5,6,7,8,9};
+naics_alts2 = zeros(NOBS, rows(altCodes2));
+threadfor i(1, rows(altCodes2), 1);
+    naics_alts2[., i] = (INPUT[., 5].==altCodes2[i]);
+threadendfor;
+// Population of area (logged)
+DATA[., rows(altCodes1)+1:rows(altCodes1)+rows(altCodes2)] = naics_alts2 .* ln(INPUT[., 9]./INPUT[., 12]);
+
+valt_pass = INPUT[., 5];
+threadfor i(1, NOBS, 1);
+    if valt_pass[i] == 5 or valt_pass[i] == 9;
+        valt_pass[i] = 5;
+    elseif valt_pass[i] == 6 or valt_pass[i] == 7 or valt_pass[i] == 8;
+        valt_pass[i] = 6;
+    endif;
+threadendfor;
+
+// NAICS code and pass train distance in km
+altCodes3 = {5};
+naics_alts3 = zeros(NOBS, rows(altCodes3));
+threadfor i(1, rows(altCodes3), 1);
+    naics_alts3[., i] = (valt_pass.==altCodes3[i]);
+threadendfor;
+pass_train_dist = amin(mattoarray(INPUT[.,17:19]),1)./10^3;
+DATA[., rows(altCodes1)+rows(altCodes2)+1:rows(altCodes1)+rows(altCodes2)+rows(altCodes3)] = naics_alts3 .* (1./pass_train_dist);
+
+// NAICS code and industrial train distance in km (could not get meaningful effect, heterogeneity within industry as to its relation to train. 
+// Check with naics_2d?. Nope... Check for proximity assuming do not transport far....nope)
+//altCodes4 = {11,21,22,23,31,32,33,42,48,49};
+//naics_alts4 = zeros(NOBS, rows(altCodes4));
+//threadfor i(1, rows(altCodes4), 1);
+//    naics_alts4[., i] = (INPUT[.,23].==altCodes4[i]);
+//threadendfor;
+
+//ind_train_dist = INPUT[.,21]./10^3;
+
+//DATA[., rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+1:rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes4)] = naics_alts4 .* (ind_train_dist .< 1) .* (INPUT[., 13].!=1);
+
+// Count the number of similar firms (by naics_3d) within 500m. Non-industrial.
+altCodes5 = {44,5,6,7,8,9};
+naics_alts5 = zeros(NOBS, rows(altCodes5));
+threadfor i(1, rows(altCodes5), 1);
+    naics_alts5[., i] = (valt_agr.==altCodes5[i]);
+threadendfor;
+DATA[., rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+1:rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes5)] = naics_alts5 .* INPUT[., 4] .* (INPUT[., 13].!=1);
+
+// Count the number of similar firms (by naics_3d) within taz. Industrial.
+altCodes6 = {2,3};
+naics_alts6 = zeros(NOBS, rows(altCodes6));
+threadfor i(1, rows(altCodes6), 1);
+    naics_alts6[., i] = (valt_agr.==altCodes6[i]);
+threadendfor;
+DATA[., rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes5)+1:rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes5)+rows(altCodes6)] = naics_alts6 .* INPUT[., 22] .* (INPUT[., 13].!=1);
+
+NGRPVAR = rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes5)+rows(altCodes6);
+//NGRPVAR = rows(altCodes1)+rows(altCodes2)+rows(altCodes3)+rows(altCodes4)+rows(altCodes5);
+
+// Total sales per employee
+
+DATA[., NGRPVAR+1] = ln(INPUT[., 7]);
+//// Assuming that 'x' is the output of the 'ln' call
+x = DATA[., 2];
+if iscplx(x);
+    print "complex matrix sent to 'ln' 1";
+    end;
+endif;
+
+// Headquarters agglomeration effect
+DATA[., NGRPVAR+2] = (INPUT[., 13].==1).*INPUT[.,24];
+
+// Credit rating id of firm (very good or excellent wrt good) - significant in MNL model
+threadfor i(1, 2, 1);
+    DATA[., NGRPVAR+2+i] = (INPUT[., 10].==i+1);
+threadendfor;
+
+if INC_RENTS==1;
+    DATA[., NVARS+1] = INPUT[.,11];
+endif;
+
+@-------LIKELIHOOD FUNCTION---------------------------------------------@
+
+proc lpr(bn, x);
+	local v, vmu3D, p13D, p23D, num, denom, p, LLR, cLLR, asc, v3D;
+    local alpha, gam, sig, Ri, xi, r, sdenom;
+    // Variable order is ASC (1-30), NAICS_AREA (31-40)
+    v3D = areshape(x[.,1:NVARS], NSITS|NALTS|NVARS);
+    
+    alpha = bn[rows(bn)-2];
+    gam = bn[rows(bn)-1];
+    sig = abs(bn[rows(bn)]);
+    
+    /* Get the utility function */
+    v = v3D * bn[1:NVARS,1];
+    
+    /* Create a 3d matrix of records x alts x nests (can sum across each dimension. Very cool!)
+       Take exponential over the nests */
+    vmu3D = zeros(NSITS * NALTS, NNESTS);
+    vmu3D = areshape(vmu3D, NSITS|NALTS|NNESTS);
+    vmu3D = exp(v);
+
+    /* Component 1 */
+    p13D = zeros(NSITS*NALTS, NNESTS);
+    p13D = areshape(p13D, NSITS|NALTS|NNESTS);
+    denom = asum(vmu3D, 2);
+    denom = atranspose(areshape(denom, NALTS|NSITS|NNESTS), 2|1|3);
+    p13D = vmu3D ./ denom;
+    
+    p = p13D;
+    
+    if INC_RENTS==1;
+        Ri = x[.,cols(x)];
+        Ri = arraytomat(areshape(Ri, NSITS|NALTS));
+        Ri = Ri[.,1];
+        sdenom = arraytomat(atranspose(denom, 3|1|2));
+        xi = Ri - alpha - gam * ln(sdenom[.,1]);
+        r = pdfn(xi, 0, sig);
+    endif;
+    
+    p = asum(p, 1);
+    p = arraytomat(atranspose(p,3|1|2));
+    if INC_RENTS==1;
+        LLR = p.*r;
+    else;
+        LLR = p;
+    endif;
+    
+    cLLR = LLR .* chosen;
+    cLLR = ln(sumr(cLLR));
+    // Assuming that 'cLLR' is the output of the 'ln' call
+    if iscplx(cLLR);
+        print "complex matrix sent to 'ln' 3";
+        end;
+    endif;
+    retp(cLLR[.,1]);
+endp;
+
+/*------Starting Values of the Parameters-*/
+B = 0.01*ones(NVARS,1);
+
+if INC_RENTS==1;
+     // Latent auction parameters
+    B = B|0|3|50;
+//    B = {0.10580469 
+//    0.0060486881
+//    -0.084440023 
+//       3.5791815 
+//       22.389503 };
+endif;
+      
+/*------DO NOT CHANGE ANYTHING BELOW------------------------------*/
+@-----Calling MAXLIK and provide Likelihood function---------------@
+
+print "Starting values:" ;
+print B ;
+library maxlik,pgraph ;
+#include maxlik.ext ;
+maxset ;
+  if INC_RENTS==1;
+      _max_Active = ones(NVARS,1)|ones(3,1);
+  else;
+      _max_Active = ones(NVARS,1);
+  endif;
+  _max_Algorithm=2;  /* 1=STEEP, 2=BFGS, 3=DFP, 4=NEWTON, 5=BHHH, 6=PRCG */
+  _max_LineSearch=2;
+  _max_GradTol=5e-4;
+  _max_MaxIters=1500;
+  _max_CovPar=1;  /* 0=none, 1=H^-1, 2=(gg')^-1, 3=2*1*2 */
+//  _max_Switch = {2,
+//                0.00001,
+//                1500,
+//                0.0001};
+__title = "GTA Firms Multinomial Location Choice";
+
+{ coeff,f,g,cov,ret } = maxprt(maxlik(DATA,0,&lpr,B)); 
+print ;
+print ;
+
+print coeff ;
+print (_max_FinalHess);
+print cov;

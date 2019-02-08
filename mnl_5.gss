@@ -22,9 +22,12 @@ dbSetPassword(id, "postgres");
 ret = dbOpen(id);
 
 qid = dbExecQuery(id, "SELECT sid, chosen, naics_cnl_ct_1km, naics_3d_ct_1km, naics_cnl, alt_id, tot_sales_emp,
-                bld_area, taz_pop, credit_id, gross_rent FROM public.working_data_1_per ORDER BY sid, alt_id");
+                bld_area, taz_pop, credit_id, gross_rent, taz_area, head_id, taz_area_com, taz_area_res, taz_area_ind,
+                d_train_go, d_train_ttc, d_lrt_ttc, d_bus_go, d_train_ind, naics_3d_ct_taz FROM public.working_data_1_per ORDER BY sid, alt_id");
 @---Array columns: 1: sid, 2: chosen, 3: naics_cnl_ct_1km, 4: naics_3d_ct_1km, 5: naics_cnl, 6: alt_id,
-               7: tot_sales_emp, 8: build_area, 9: taz_pop, 10: credit_id, 11: gross_rent ---@
+               7: tot_sales_emp, 8: build_area, 9: taz_pop, 10: credit_id, 11: gross_rent, 12: taz_area,
+               13: head_id, 14: taz_area_com, 15: taz_area_res, 16: taz_area_ind, 17: d_train_go, 18: d_train_ttc,
+               19: d_lrt_ttc, 20: d_bus_go, 21: d_train_ind, 22: naics_3d_ct_1km ---@
 INPUT =  dbQueryFetchAllM(qid);
 save INPUT;
 dbClose(id);
@@ -32,14 +35,14 @@ dbClose(id);
 load INPUT;
 
 NOBS =rows(INPUT);
-NHEAD = 2;
+NHEAD = 3;  // 4 - 1 for identification since area held constant for all alternatives
 NNAICS = 9; // 10 - 1 for identification since area held constant for all alternatives
-NALTS = 59;
+NALTS = 60;
 NALTS_C = 22; // 30 - 1 for identification since area held constant for all alternatives
 NSITS = NOBS / NALTS;
 NNESTS = 1;
 // CHECK ME: need to update when adding/removing variables!
-NVARS = NALTS_C+2;
+NVARS = 29;
 
 // Indicates whether to include latent auction component (normal dist)
 INC_RENTS = 1;
@@ -50,33 +53,84 @@ chosen = reshape(vChosen, NSITS, NALTS);
 DATA = zeros(NOBS, NVARS+1);
 
 // When combining, could switch out alt_id to combine, so series from 1-28 for example
-alts = zeros(NOBS, NALTS_C);
-altCodes = seqa(1,1,NALTS_C);
-// Combine alt_ids: 8, 9, 10, 12, 13, 19, 21 into 6
-INPUT[INPUT[.,6].==8, 6] = 6;
+//alts = zeros(NOBS, NALTS_C);
+//valt_area = INPUT[., 6];
+//// Combine alt_ids: 8, 9, 10, 12, 13, 19, 21 into 6
+//threadfor i(1, NOBS, 1);
+//    if (valt_area[i] == 8 or valt_area[i] == 9 or valt_area[i] == 10 or valt_area[i] == 12 or valt_area[i] == 13 or valt_area[i] == 19 or valt_area[i] == 21);
+//        valt_area[i] = 6;
+//    endif;
+//threadendfor;
+//altCodes = seqa(1,1,5)|6|7|11|14|15|16|17|18|20|seqa(22,1,8);
+//threadfor i(1, rows(altCodes), 1);
+//    alts[., i] = (valt_area.==altCodes[i]);
+//threadendfor;
 
+// Head code and area of building
+altCodes = seqa(1,1,NHEAD);
+head_alts = zeros(NOBS, NHEAD);
 threadfor i(1, rows(altCodes), 1);
-    alts[., i] = (INPUT[., 6].==altCodes[i]);
+    head_alts[., i] = (INPUT[., 13].==altCodes[i]);
 threadendfor;
 
-// Population of area (logged) - seems to give problem for alts 13, 19, and 21 because poorly scaled
-//DATA[., 1:NALTS_C] = alts .* ln(INPUT[., 9]);
-// Area of building (logged)
-DATA[., 1:NALTS_C] = alts .* ln(INPUT[., 8]);
+// Area of building (100s of sqm)
+//DATA[., 1:NHEAD] = head_alts .* INPUT[., 8] ./ 10^2;
 
-// Count the number of similar firms (by naics_cnl) as 100s within 500m. Different industries different distances?
-DATA[., NALTS_C+1] = INPUT[., 3] ./ 10^2;
+// NAICS code and population density
+altCodes = {2,3,42,44,5,6,7,8,9};
+naics_alts = zeros(NOBS, NNAICS);
+threadfor i(1, rows(altCodes), 1);
+    naics_alts[., i] = (INPUT[., 5].==altCodes[i]);
+threadendfor;
+// Population of area (logged)
+DATA[., 1:rows(altCodes)] = naics_alts .* ln(INPUT[., 9]./INPUT[., 12]);
+
+// NAICS code and pass train distance in km
+// NAICS code and industrial train distance in km
+altCodes1 = {2,3,42};
+naics_alts_1 = zeros(NOBS, rows(altCodes1));
+threadfor i(1, rows(altCodes1), 1);
+    naics_alts_1[., i] = (INPUT[., 5].==altCodes1[i]);
+threadendfor;
+altCodes4 = {3,42,44,5,6,7,8,9};
+naics_alts_4 = zeros(NOBS, rows(altCodes4));
+threadfor i(1, rows(altCodes4), 1);
+    naics_alts_4[., i] = (INPUT[., 5].==altCodes4[i]);
+threadendfor;
+pass_train_dist = amin(mattoarray(INPUT[.,17:19]),1)./10^3;
+ind_train_dist = INPUT[.,21]./10^3;
+DATA[., rows(altCodes)+1:rows(altCodes)+rows(altCodes1)] = naics_alts_1 .* (1./ind_train_dist);
+DATA[., rows(altCodes)+rows(altCodes1)+1:rows(altCodes)+rows(altCodes1)+rows(altCodes4)] = naics_alts_4 .* (1./pass_train_dist);
+
+// Pass train distance (Headquarters locations only)
+//DATA[., NGRPVAR+1] = (1./pass_train_dist) .* (INPUT[., 13].==1);
+// Count the number of similar firms (by naics_3d) as 10s within 500m. Different industries different distances?
+altCodes2 = {3,44,6,7,8,9};
+naics_alts_2 = zeros(NOBS, rows(altCodes2));
+threadfor i(1, rows(altCodes2), 1);
+    naics_alts_2[., i] = (INPUT[., 5].==altCodes2[i]);
+threadendfor;
+DATA[., rows(altCodes)+rows(altCodes1)+rows(altCodes4)+1:rows(altCodes)+rows(altCodes1)+rows(altCodes4)+rows(altCodes2)] = naics_alts_2 .* INPUT[., 4];
+altCodes3 = {2,42,5};
+naics_alts_3 = zeros(NOBS, rows(altCodes3));
+threadfor i(1, rows(altCodes3), 1);
+    naics_alts_3[., i] = (INPUT[., 5].==altCodes3[i]);
+threadendfor;
+DATA[., rows(altCodes)+rows(altCodes1)+rows(altCodes4)+rows(altCodes2)+1:rows(altCodes)+rows(altCodes1)+rows(altCodes4)+rows(altCodes2)+rows(altCodes3)] = naics_alts_3 .* INPUT[., 22];
+
+NGRPVAR = rows(altCodes)+rows(altCodes1)+rows(altCodes4)+rows(altCodes2)+rows(altCodes3);
+
 // Total sales per employee
-DATA[., NALTS_C+2] = ln(INPUT[., 7]);
-// Assuming that 'x' is the output of the 'ln' call
+//DATA[., NGRPVAR+1] = ln(INPUT[., 7]);
+//// Assuming that 'x' is the output of the 'ln' call
 x = DATA[., 2];
 if iscplx(x);
     print "complex matrix sent to 'ln' 1";
     end;
 endif;
-//// Credit rating id of firm (very good or excellent wrt good)
+//// Credit rating id of firm (very good or excellent wrt good) - not significant in MNL model
 //threadfor i(1, 2, 1);
-//    DATA[., NALTS_C+2+i] = (INPUT[., 10].==i+1);
+//    DATA[., NGRPVAR+2+i] = (INPUT[., 10].==i+1);
 //threadendfor;
 
 if INC_RENTS==1;
